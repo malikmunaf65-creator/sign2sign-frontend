@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700&family=Hanken+Grotesk:wght@300;400;500&family=Geist:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #d0bcff;
+  --color-on-primary: #3c0091;
+  --color-primary-container: #a078ff;
+  --color-on-primary-container: #340080;
+  
+  --color-secondary: #4cd7f6;
+  --color-on-secondary: #003640;
+  --color-secondary-container: #03b5d3;
+  --color-on-secondary-container: #00424e;
+  
+  --color-surface: #101415;
+  --color-on-surface: #e0e3e5;
+  --color-on-surface-variant: #cbc3d7;
+  --color-background: #0b0f10;
+  
+  --font-display: "Manrope", sans-serif;
+  --font-body: "Hanken Grotesk", sans-serif;
+  --font-label: "Geist", sans-serif;
+  
+  --radius-xl: 1.5rem;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-on-surface font-body antialiased selection:bg-primary/30;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply relative overflow-hidden backdrop-blur-2xl bg-white/[0.03] border border-white/[0.08] shadow-2xl;
+  }
+  
+  .glass-card-edge {
+    @apply absolute inset-0 pointer-events-none;
+    background: linear-gradient(135deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0) 50%);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    padding: 1px;
+  }
+  
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
+  }
+  
+  .glow-primary {
+    @apply shadow-[0_0_40px_rgba(208,188,255,0.15)];
+  }
+  
+  .glow-secondary {
+    @apply shadow-[0_0_40px_rgba(76,215,246,0.15)];
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-background;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
+}

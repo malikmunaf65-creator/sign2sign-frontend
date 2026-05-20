@@ -1,0 +1,8 @@
+{
+  "name": "Sign2Sign",
+  "description": "High-end AI-powered sign language translation with emotional mapping.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
