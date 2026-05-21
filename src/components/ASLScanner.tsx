@@ -1,10 +1,13 @@
-// src/components/ASLScanner.tsx
+// src/components/ASLScanner.tsx — with webcam + file upload
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { auth } from "../lib/firebase";
 import { signOut } from "firebase/auth";
-import { Hand, Zap, ZapOff, Activity, RotateCcw, Clock, Wifi, LogOut } from "lucide-react";
+import {
+  Hand, Zap, ZapOff, Activity, RotateCcw,
+  Clock, Wifi, LogOut, Upload, Camera
+} from "lucide-react";
 
 const RAILWAY_URL       = import.meta.env.VITE_RAILWAY_API_URL as string;
 const FRAME_INTERVAL_MS = 700;
@@ -25,17 +28,23 @@ interface Prediction {
   latencyMs: number;
 }
 
-export default function ASLScanner() {
-  const videoRef      = useRef<HTMLVideoElement>(null);
-  const landmarkerRef = useRef<HandLandmarker | null>(null);
-  const intervalRef   = useRef<ReturnType<typeof setInterval>>();
+type Mode = "webcam" | "upload";
 
+export default function ASLScanner() {
+  const videoRef       = useRef<HTMLVideoElement>(null);
+  const imageRef       = useRef<HTMLImageElement>(null);
+  const landmarkerRef  = useRef<HandLandmarker | null>(null);
+  const intervalRef    = useRef<ReturnType<typeof setInterval>>();
+
+  const [mode,       setMode]       = useState<Mode>("webcam");
   const [phase,      setPhase]      = useState<"idle"|"initializing"|"active"|"stopped"|"error">("idle");
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [history,    setHistory]    = useState<string[]>([]);
   const [fps,        setFps]        = useState(0);
   const [ping,       setPing]       = useState<number | null>(null);
   const [error,      setError]      = useState("");
+  const [uploadedImg, setUploadedImg] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const fpsRef = useRef(0);
 
   useEffect(() => {
@@ -44,6 +53,7 @@ export default function ASLScanner() {
   }, []);
 
   const loadMediaPipe = useCallback(async () => {
+    if (landmarkerRef.current) return;
     const vision = await FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
     );
@@ -52,50 +62,25 @@ export default function ASLScanner() {
         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
         delegate: "GPU",
       },
-      runningMode: "VIDEO",
+      runningMode: "IMAGE",
       numHands: 1,
     });
   }, []);
 
-  const startCamera = useCallback(async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: "user" }, audio: false,
-    });
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-    }
-  }, []);
-
   const getToken = useCallback(async (): Promise<string> => {
     const user = auth.currentUser;
-    // Dev mode: no token needed
     if (!user) return "dev";
     return user.getIdToken(false);
   }, []);
 
-  const processFrame = useCallback(async () => {
-    const video     = videoRef.current;
-    const landmarker = landmarkerRef.current;
-    if (!video || !landmarker || video.readyState < 2) return;
-
-    const result = landmarker.detectForVideo(video, performance.now());
-
-    if (!result.landmarks || result.landmarks.length === 0) {
-      setPrediction(prev => prev ? { ...prev, handDetected: false } : null);
-      return;
-    }
-
-    const landmarks = result.landmarks[0].flatMap(lm => [lm.x, lm.y, lm.z]);
-
+  const sendLandmarks = useCallback(async (landmarks: number[]) => {
     try {
       const token = await getToken();
-      const t0    = performance.now();
-
+      const t0 = performance.now();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token !== "dev") headers["Authorization"] = `Bearer ${token}`;
 
-      const res  = await fetch(`${RAILWAY_URL}/predict`, {
+      const res = await fetch(`${RAILWAY_URL}/predict`, {
         method: "POST", headers,
         body: JSON.stringify({ landmarks }),
       });
@@ -121,9 +106,74 @@ export default function ASLScanner() {
         });
       }
     } catch (err) {
-      console.warn("Frame error:", err);
+      console.warn("Predict error:", err);
     }
   }, [getToken]);
+
+  // ── IMAGE UPLOAD MODE ──────────────────────────────────────────────────────
+  const handleFileUpload = useCallback(async (file: File) => {
+    setIsAnalyzing(true);
+    setPrediction(null);
+    setError("");
+
+    try {
+      await loadMediaPipe();
+      if (!landmarkerRef.current) throw new Error("MediaPipe not loaded");
+
+      // Switch to IMAGE mode
+      await landmarkerRef.current.setOptions({ runningMode: "IMAGE" });
+
+      const url = URL.createObjectURL(file);
+      setUploadedImg(url);
+
+      const img = new Image();
+      img.src = url;
+      await new Promise(resolve => img.onload = resolve);
+
+      const result = landmarkerRef.current.detect(img);
+
+      if (!result.landmarks || result.landmarks.length === 0) {
+        setError("No hand detected in image. Try a clearer photo.");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const landmarks = result.landmarks[0].flatMap(lm => [lm.x, lm.y, lm.z]);
+      await sendLandmarks(landmarks);
+    } catch (err: any) {
+      setError(err.message || "Failed to analyze image");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [loadMediaPipe, sendLandmarks]);
+
+  // ── WEBCAM MODE ────────────────────────────────────────────────────────────
+  const startCamera = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: "user" }, audio: false,
+    });
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+    }
+  }, []);
+
+  const processFrame = useCallback(async () => {
+    const video = videoRef.current;
+    const landmarker = landmarkerRef.current;
+    if (!video || !landmarker || video.readyState < 2) return;
+
+    await landmarker.setOptions({ runningMode: "VIDEO" });
+    const result = landmarker.detectForVideo(video, performance.now());
+
+    if (!result.landmarks || result.landmarks.length === 0) {
+      setPrediction(prev => prev ? { ...prev, handDetected: false } : null);
+      return;
+    }
+
+    const landmarks = result.landmarks[0].flatMap(lm => [lm.x, lm.y, lm.z]);
+    await sendLandmarks(landmarks);
+  }, [sendLandmarks]);
 
   const initScanner = useCallback(async () => {
     setPhase("initializing");
@@ -143,10 +193,18 @@ export default function ASLScanner() {
     clearInterval(intervalRef.current);
     videoRef.current?.srcObject && (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
     if (videoRef.current) videoRef.current.srcObject = null;
-    landmarkerRef.current = null;
     setPhase("stopped");
     setPrediction(null);
   }, []);
+
+  const switchMode = (newMode: Mode) => {
+    stopScanner();
+    setPrediction(null);
+    setUploadedImg(null);
+    setError("");
+    setMode(newMode);
+    setPhase("idle");
+  };
 
   useEffect(() => () => stopScanner(), [stopScanner]);
 
@@ -175,19 +233,31 @@ export default function ASLScanner() {
             <Hand size={16} color="white" />
           </div>
           <span style={{ fontSize: 11, letterSpacing: "0.25em", color: "#94a3b8", fontWeight: 700 }}>SIGN2SIGN AI</span>
-          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, letterSpacing: "0.2em",
-            border: `1px solid ${isActive ? "rgba(0,255,170,0.3)" : "rgba(255,255,255,0.08)"}`,
-            color: isActive ? "#00ffaa" : "#475569" }}>
-            {phase.toUpperCase()}
-          </span>
         </div>
+
+        {/* Mode switcher */}
+        <div style={{ display: "flex", gap: 8 }}>
+          {(["webcam", "upload"] as Mode[]).map(m => (
+            <button key={m} onClick={() => switchMode(m)}
+              style={{ padding: "6px 16px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                letterSpacing: "0.15em", cursor: "pointer", border: "none",
+                background: mode === m ? "linear-gradient(135deg,#0077b6,#00b4d8)" : "#0a1628",
+                color: mode === m ? "white" : "#475569",
+                display: "flex", alignItems: "center", gap: 6 }}>
+              {m === "webcam" ? <Camera size={12} /> : <Upload size={12} />}
+              {m.toUpperCase()}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: 20, fontSize: 11, color: "#475569" }}>
-          {ping !== null && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Wifi size={12} />{ping}ms</span>}
-          {isActive && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Activity size={12} color="#4ade80" />{fps} fps</span>}
-          {user && <span style={{ color: "#334155" }}>{user.email?.split("@")[0] ?? "user"}</span>}
+          {ping !== null && <span>{ping}ms</span>}
+          {isActive && <span style={{ color: "#4ade80" }}>{fps} fps</span>}
+          {user && <span>{user.email?.split("@")[0]}</span>}
           {user && (
             <button onClick={() => signOut(auth)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#475569", display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+              style={{ background: "none", border: "none", cursor: "pointer",
+                color: "#475569", display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
               <LogOut size={13} /> Sign out
             </button>
           )}
@@ -195,68 +265,130 @@ export default function ASLScanner() {
       </header>
 
       {/* Body */}
-      <div style={{ position: "relative", zIndex: 10, flex: 1, display: "flex",
-        flexDirection: "row", overflow: "hidden" }}>
+      <div style={{ position: "relative", zIndex: 10, flex: 1, display: "flex", overflow: "hidden" }}>
 
-        {/* Camera panel */}
+        {/* Left panel */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-          <div style={{ position: "relative", flex: 1, margin: 20, borderRadius: 20, overflow: "hidden",
-            border: `1px solid ${isActive ? "rgba(0,180,216,0.15)" : "rgba(255,255,255,0.05)"}`,
-            background: "#020917", minHeight: 320 }}>
 
-            <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} muted playsInline />
+          {/* ── WEBCAM MODE ── */}
+          {mode === "webcam" && (
+            <div style={{ position: "relative", flex: 1, margin: 20, borderRadius: 20, overflow: "hidden",
+              border: `1px solid ${isActive ? "rgba(0,180,216,0.15)" : "rgba(255,255,255,0.05)"}`,
+              background: "#020917", minHeight: 320 }}>
+              <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} muted playsInline />
 
-            {/* Scan line */}
-            {isActive && (
-              <motion.div style={{ position: "absolute", left: 0, right: 0, height: 2, pointerEvents: "none",
-                background: "linear-gradient(90deg,transparent,rgba(0,180,216,0.3),#00b4d8,rgba(0,180,216,0.3),transparent)" }}
-                animate={{ top: ["4%", "96%", "4%"] }}
-                transition={{ duration: 3, repeat: Infinity, ease: "linear" }} />
-            )}
-
-            {/* Corners */}
-            {isActive && [
-              { top: 14, left: 14, borderTop: "2px solid #00b4d8", borderLeft: "2px solid #00b4d8", borderRadius: "8px 0 0 0" },
-              { top: 14, right: 14, borderTop: "2px solid #00b4d8", borderRight: "2px solid #00b4d8", borderRadius: "0 8px 0 0" },
-              { bottom: 14, left: 14, borderBottom: "2px solid #00b4d8", borderLeft: "2px solid #00b4d8", borderRadius: "0 0 0 8px" },
-              { bottom: 14, right: 14, borderBottom: "2px solid #00b4d8", borderRight: "2px solid #00b4d8", borderRadius: "0 0 8px 0" },
-            ].map((s, i) => <div key={i} style={{ position: "absolute", width: 28, height: 28, ...s }} />)}
-
-            {/* State overlay */}
-            <AnimatePresence>
-              {!isActive && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-                    alignItems: "center", justifyContent: "center", gap: 16,
-                    background: "rgba(2,9,23,0.93)" }}>
-                  {phase === "initializing" ? (
-                    <>
-                      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-                        style={{ width: 52, height: 52, borderRadius: "50%", border: "2px solid rgba(0,180,216,0.15)", borderTopColor: "#00b4d8" }} />
-                      <p style={{ fontSize: 11, letterSpacing: "0.3em", color: "#00b4d8" }}>LOADING MEDIAPIPE…</p>
-                      <p style={{ fontSize: 10, color: "#334155" }}>First load downloads AI model (~5s)</p>
-                    </>
-                  ) : phase === "error" ? (
-                    <p style={{ color: "#f87171", fontSize: 13, textAlign: "center", maxWidth: 280 }}>⚠ {error}</p>
-                  ) : (
-                    <>
-                      <Hand size={52} color="#1e3a5a" />
-                      <p style={{ fontSize: 11, letterSpacing: "0.3em", color: "#1e3a5a" }}>SCANNER OFFLINE</p>
-                    </>
-                  )}
-                </motion.div>
+              {isActive && (
+                <motion.div style={{ position: "absolute", left: 0, right: 0, height: 2, pointerEvents: "none",
+                  background: "linear-gradient(90deg,transparent,rgba(0,180,216,0.3),#00b4d8,rgba(0,180,216,0.3),transparent)" }}
+                  animate={{ top: ["4%", "96%", "4%"] }}
+                  transition={{ duration: 3, repeat: Infinity, ease: "linear" }} />
               )}
-            </AnimatePresence>
 
-            {/* Latency */}
-            {isActive && prediction?.latencyMs && (
-              <div style={{ position: "absolute", bottom: 12, right: 12, fontSize: 10, padding: "2px 8px",
-                borderRadius: 4, background: "rgba(2,9,23,0.8)", color: "#475569",
-                border: "1px solid rgba(255,255,255,0.05)", display: "flex", alignItems: "center", gap: 4 }}>
-                <Clock size={10} />{prediction.latencyMs}ms
-              </div>
-            )}
-          </div>
+              {isActive && [
+                { top: 14, left: 14, borderTop: "2px solid #00b4d8", borderLeft: "2px solid #00b4d8", borderRadius: "8px 0 0 0" },
+                { top: 14, right: 14, borderTop: "2px solid #00b4d8", borderRight: "2px solid #00b4d8", borderRadius: "0 8px 0 0" },
+                { bottom: 14, left: 14, borderBottom: "2px solid #00b4d8", borderLeft: "2px solid #00b4d8", borderRadius: "0 0 0 8px" },
+                { bottom: 14, right: 14, borderBottom: "2px solid #00b4d8", borderRight: "2px solid #00b4d8", borderRadius: "0 0 8px 0" },
+              ].map((s, i) => <div key={i} style={{ position: "absolute", width: 28, height: 28, ...s }} />)}
+
+              <AnimatePresence>
+                {!isActive && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                    style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+                      alignItems: "center", justifyContent: "center", gap: 16, background: "rgba(2,9,23,0.93)" }}>
+                    {phase === "initializing" ? (
+                      <>
+                        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                          style={{ width: 52, height: 52, borderRadius: "50%", border: "2px solid rgba(0,180,216,0.15)", borderTopColor: "#00b4d8" }} />
+                        <p style={{ fontSize: 11, letterSpacing: "0.3em", color: "#00b4d8" }}>LOADING MEDIAPIPE…</p>
+                        <p style={{ fontSize: 10, color: "#334155" }}>First load ~5 seconds</p>
+                      </>
+                    ) : phase === "error" ? (
+                      <p style={{ color: "#f87171", fontSize: 13, textAlign: "center", maxWidth: 280 }}>⚠ {error}</p>
+                    ) : (
+                      <>
+                        <Camera size={52} color="#1e3a5a" />
+                        <p style={{ fontSize: 11, letterSpacing: "0.3em", color: "#1e3a5a" }}>SCANNER OFFLINE</p>
+                      </>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {isActive && prediction?.latencyMs && (
+                <div style={{ position: "absolute", bottom: 12, right: 12, fontSize: 10,
+                  padding: "2px 8px", borderRadius: 4, background: "rgba(2,9,23,0.8)",
+                  color: "#475569", border: "1px solid rgba(255,255,255,0.05)",
+                  display: "flex", alignItems: "center", gap: 4 }}>
+                  <Clock size={10} />{prediction.latencyMs}ms
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── UPLOAD MODE ── */}
+          {mode === "upload" && (
+            <div style={{ flex: 1, margin: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+              {/* Drop zone */}
+              <label style={{ position: "relative", flex: uploadedImg ? 0 : 1, minHeight: uploadedImg ? "auto" : 320,
+                borderRadius: 20, border: "2px dashed rgba(0,180,216,0.3)",
+                background: "#020917", display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center", gap: 12, cursor: "pointer",
+                transition: "border-color 0.2s", padding: 24 }}>
+                <input type="file" accept="image/*" style={{ display: "none" }}
+                  onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])} />
+                <Upload size={40} color="#1e3a5a" />
+                <p style={{ fontSize: 13, color: "#475569", textAlign: "center" }}>
+                  Click to upload a hand sign image
+                </p>
+                <p style={{ fontSize: 11, color: "#334155" }}>JPG, PNG, WEBP supported</p>
+                <div style={{ padding: "8px 20px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                  background: "linear-gradient(135deg,#0077b6,#00b4d8)", color: "white",
+                  letterSpacing: "0.15em" }}>
+                  BROWSE FILES
+                </div>
+              </label>
+
+              {/* Preview */}
+              {uploadedImg && (
+                <div style={{ position: "relative", borderRadius: 20, overflow: "hidden",
+                  border: "1px solid rgba(0,180,216,0.15)", background: "#020917", flex: 1, minHeight: 280 }}>
+                  <img src={uploadedImg} alt="uploaded"
+                    style={{ width: "100%", height: "100%", objectFit: "contain", maxHeight: 400 }} />
+
+                  {isAnalyzing && (
+                    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+                      alignItems: "center", justifyContent: "center", gap: 12,
+                      background: "rgba(2,9,23,0.85)" }}>
+                      <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                        style={{ width: 40, height: 40, borderRadius: "50%",
+                          border: "2px solid rgba(0,180,216,0.2)", borderTopColor: "#00b4d8" }} />
+                      <p style={{ fontSize: 11, color: "#00b4d8", letterSpacing: "0.2em" }}>ANALYZING…</p>
+                    </div>
+                  )}
+
+                  {error && (
+                    <div style={{ position: "absolute", bottom: 12, left: 12, right: 12,
+                      padding: "10px 16px", borderRadius: 10,
+                      background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)",
+                      color: "#fca5a5", fontSize: 12, textAlign: "center" }}>
+                      {error}
+                    </div>
+                  )}
+
+                  {/* Re-upload button */}
+                  <label style={{ position: "absolute", top: 12, right: 12, cursor: "pointer",
+                    padding: "6px 12px", borderRadius: 8, background: "rgba(2,9,23,0.8)",
+                    border: "1px solid rgba(255,255,255,0.1)", fontSize: 11, color: "#94a3b8",
+                    display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="file" accept="image/*" style={{ display: "none" }}
+                      onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])} />
+                    <Upload size={12} /> New image
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* History strip */}
           <div style={{ margin: "0 20px 20px", padding: 16, borderRadius: 16,
@@ -264,8 +396,8 @@ export default function ASLScanner() {
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
               <span style={{ fontSize: 10, letterSpacing: "0.25em", color: "#334155" }}>SIGN HISTORY</span>
               <button onClick={() => setHistory([])}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "#334155", fontSize: 10,
-                  display: "flex", alignItems: "center", gap: 4 }}>
+                style={{ background: "none", border: "none", cursor: "pointer", color: "#334155",
+                  fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}>
                 <RotateCcw size={10} /> CLEAR
               </button>
             </div>
@@ -279,7 +411,7 @@ export default function ASLScanner() {
                       {sign === "space" ? "⎵" : sign === "del" ? "⌫" : sign}
                     </motion.span>
                   ))
-                  : <span style={{ color: "#1e3a5a", fontSize: 12 }}>High-confidence signs appear here…</span>
+                  : <span style={{ color: "#1e3a5a", fontSize: 12 }}>Recognized signs appear here…</span>
                 }
               </AnimatePresence>
             </div>
@@ -294,10 +426,10 @@ export default function ASLScanner() {
           <div style={{ borderRadius: 20, padding: 24, display: "flex", flexDirection: "column",
             alignItems: "center", justifyContent: "center", textAlign: "center", gap: 12,
             background: "linear-gradient(135deg,#080f1e,#0a1628)",
-            border: "1px solid rgba(0,180,216,0.08)", minHeight: 200, flex: 0 }}>
+            border: "1px solid rgba(0,180,216,0.08)", minHeight: 200 }}>
             <span style={{ fontSize: 10, letterSpacing: "0.3em", color: "#334155" }}>DETECTED SIGN</span>
             <AnimatePresence mode="wait">
-              {isActive && prediction?.handDetected ? (
+              {prediction?.handDetected ? (
                 <motion.div key={prediction.topSign}
                   initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
                   style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
@@ -325,7 +457,9 @@ export default function ASLScanner() {
                 <motion.div key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                   style={{ opacity: 0.25, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                   <Hand size={40} color="#475569" />
-                  <p style={{ fontSize: 12, color: "#475569" }}>{isActive ? "Show a hand sign…" : "—"}</p>
+                  <p style={{ fontSize: 12, color: "#475569" }}>
+                    {mode === "upload" ? "Upload an image…" : isActive ? "Show a hand sign…" : "—"}
+                  </p>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -357,30 +491,43 @@ export default function ASLScanner() {
             ))}
           </div>
 
-          {/* Control button */}
+          {/* Control */}
           <div style={{ marginTop: "auto" }}>
-            {phase !== "active" ? (
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                onClick={initScanner} disabled={phase === "initializing"}
-                style={{ width: "100%", padding: "14px", borderRadius: 12, fontWeight: 700,
-                  fontSize: 11, letterSpacing: "0.2em", border: "none",
-                  cursor: phase === "initializing" ? "wait" : "pointer",
-                  background: phase === "initializing" ? "#0a1628" : "linear-gradient(135deg,#0077b6,#00b4d8)",
-                  color: phase === "initializing" ? "#334155" : "white",
-                  boxShadow: phase === "initializing" ? "none" : "0 0 24px rgba(0,180,216,0.2)",
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                <Zap size={15} />
-                {phase === "initializing" ? "LOADING…" : "INITIALIZE SCANNER"}
-              </motion.button>
-            ) : (
-              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                onClick={stopScanner}
-                style={{ width: "100%", padding: "14px", borderRadius: 12, fontWeight: 700,
-                  fontSize: 11, letterSpacing: "0.2em", cursor: "pointer",
-                  background: "transparent", border: "1px solid rgba(239,68,68,0.25)",
-                  color: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                <ZapOff size={15} /> STOP SCANNER
-              </motion.button>
+            {mode === "webcam" && (
+              phase !== "active" ? (
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                  onClick={initScanner} disabled={phase === "initializing"}
+                  style={{ width: "100%", padding: "14px", borderRadius: 12, fontWeight: 700,
+                    fontSize: 11, letterSpacing: "0.2em", border: "none",
+                    cursor: phase === "initializing" ? "wait" : "pointer",
+                    background: phase === "initializing" ? "#0a1628" : "linear-gradient(135deg,#0077b6,#00b4d8)",
+                    color: phase === "initializing" ? "#334155" : "white",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <Zap size={15} />
+                  {phase === "initializing" ? "LOADING…" : "INITIALIZE SCANNER"}
+                </motion.button>
+              ) : (
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                  onClick={stopScanner}
+                  style={{ width: "100%", padding: "14px", borderRadius: 12, fontWeight: 700,
+                    fontSize: 11, letterSpacing: "0.2em", cursor: "pointer",
+                    background: "transparent", border: "1px solid rgba(239,68,68,0.25)",
+                    color: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <ZapOff size={15} /> STOP SCANNER
+                </motion.button>
+              )
+            )}
+
+            {mode === "upload" && (
+              <label style={{ width: "100%", padding: "14px", borderRadius: 12, fontWeight: 700,
+                fontSize: 11, letterSpacing: "0.2em", cursor: "pointer",
+                background: "linear-gradient(135deg,#0077b6,#00b4d8)", color: "white",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                boxShadow: "0 0 24px rgba(0,180,216,0.2)" }}>
+                <input type="file" accept="image/*" style={{ display: "none" }}
+                  onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0])} />
+                <Upload size={15} /> UPLOAD IMAGE
+              </label>
             )}
           </div>
 
