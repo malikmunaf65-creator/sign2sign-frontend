@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+FIREBASE_CREDENTIALS_JSON.json
+*.json

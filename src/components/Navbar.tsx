@@ -50,7 +50,12 @@ export default function Navbar() {
             Live Prediction
           </button>
 
-          <a href="#" className="text-on-surface-variant font-body text-sm hover:text-secondary transition-all duration-300">Early Access</a>
+          <button
+  onClick={() => navigate("/signup")}
+  className="text-on-surface-variant font-body text-sm hover:text-secondary transition-all duration-300 cursor-pointer"
+>
+  Early Access
+</button>
         </div>
 
         {/* Experience Connect button → goes to scanner */}
