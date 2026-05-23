@@ -1344,5 +1344,3 @@ export default function ScannerDashboard() {
     </div>
   );
 }
-TSEOF
-echo "done"
