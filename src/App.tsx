@@ -1,4 +1,4 @@
-// src/App.tsx  — REPLACE your existing App.tsx with this
+
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { onAuthStateChanged, User } from "firebase/auth";
@@ -15,7 +15,7 @@ import Footer        from "./components/Footer";
 
 // New auth + scanner components
 import { LoginPage, SignupPage, ProtectedRoute } from "./components/AuthPages";
-import ASLScanner from "./components/ASLScanner";
+import ScannerDashboard from "./components/ScannerDashboard";
 
 // Your existing landing page assembled
 function LandingPage() {
@@ -55,11 +55,14 @@ export default function App() {
         <Route path="/signup" element={user ? <Navigate to="/scanner" replace /> : <SignupPage />} />
 
         {/* Protected scanner */}
-        <Route path="/scanner" element={
-          <ProtectedRoute user={user} loading={loading}>
-            <ASLScanner />
-          </ProtectedRoute>
-        } />
+        <Route
+  path="/scanner"
+  element={
+    <ProtectedRoute user={user} loading={loading}>
+      <ScannerDashboard />
+    </ProtectedRoute>
+  }
+/>
 
         {/* Catch-all */}
         <Route path="*" element={<Navigate to="/" replace />} />
