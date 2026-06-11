@@ -690,7 +690,13 @@ export default function ScannerDashboard() {
 
         {/* ══ SCANNER TAB ══ */}
         {tab==="scanner"&&(
-          <div style={{height:"100%",display:"flex"}}>
+          <div
+  style={{
+    height:"100%",
+    display:"flex",
+    flexDirection: window.innerWidth < 768 ? "column" : "row"
+  }}
+>
             <div style={{flex:1,display:"flex",flexDirection:"column"}}>
               {/* Mode toggle */}
               <div style={{display:"flex",gap:6,padding:"10px 14px 0"}}>
@@ -765,7 +771,7 @@ export default function ScannerDashboard() {
             </div>
 
             {/* Right panel */}
-            <div style={{width:270,display:"flex",flexDirection:"column",gap:12,padding:14,borderLeft:`1px solid ${theme.border}`}}>
+            <div style={{width: window.innerWidth < 768 ? "100%" : 270,,display:"flex",flexDirection:"column",gap:12,padding:14,borderLeft: window.innerWidth < 768 ? "none" : `1px solid ${theme.border}`}}>
               {/* Big sign */}
               <div style={{borderRadius:18,padding:18,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",gap:8,background:theme.surface,border:`1px solid ${theme.border}`,minHeight:180}}>
                 <span style={{fontSize:9,letterSpacing:"0.3em",color:theme.textDim}}>{t.detected}</span>
