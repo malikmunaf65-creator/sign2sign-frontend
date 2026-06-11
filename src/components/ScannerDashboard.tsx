@@ -631,8 +631,26 @@ export default function ScannerDashboard() {
       </AnimatePresence>
 
       {/* ── HEADER ── */}
-      <header style={{position:"relative",zIndex:10,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 20px",borderBottom:`1px solid ${theme.border}`,background:theme.header,backdropFilter:"blur(12px)"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <header
+  style={{
+    position:"relative",
+    zIndex:10,
+    display:"flex",
+    alignItems:"center",
+    justifyContent:"space-between",
+    padding:"10px 20px",
+    borderBottom:`1px solid ${theme.border}`,
+    overflowX:"hidden"
+  }}
+>
+        <div
+  style={{
+    display:"flex",
+    alignItems:"center",
+    gap:10,
+    flexShrink:1
+  }}
+>
           <div style={{width:30,height:30,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#00b4d8,#0077b6)"}}>
             <Hand size={15} color="white"/>
           </div>
@@ -641,7 +659,14 @@ export default function ScannerDashboard() {
         </div>
 
         {/* Tabs */}
-        <div style={{display:"flex",gap:2}}>
+       <div
+  style={{
+    display:"flex",
+    gap:2,
+    overflowX:"auto",
+    maxWidth: window.innerWidth < 768 ? "160px" : "none"
+  }}
+>
           {([
             {id:"scanner",icon:<Scan size={12}/>,label:t.scanner},
             {id:"learn",icon:<BookOpen size={12}/>,label:t.learn},
@@ -686,7 +711,16 @@ export default function ScannerDashboard() {
       </header>
 
       {/* ── CONTENT ── */}
-      <div style={{position:"relative",zIndex:10,flex:1,overflow:"hidden"}}>
+      <div
+  style={{
+    position:"relative",
+    zIndex:10,
+    flex:1,
+    overflowX:"hidden",
+    overflowY:"auto",
+    width:"100%"
+  }}
+>
 
         {/* ══ SCANNER TAB ══ */}
         {tab==="scanner"&&(
